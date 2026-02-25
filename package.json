@@ -1,0 +1,46 @@
+{
+  "name": "pi-model-picker",
+  "version": "1.0.0",
+  "description": "Categorized, keyboard-driven model selector for the pi coding agent",
+  "type": "module",
+  "bin": {
+    "pi-model-picker": "./scripts/install.js"
+  },
+  "files": [
+    "index.ts",
+    "scripts/",
+    "SKILL.md",
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@mariozechner/pi-ai": "*"
+  },
+  "scripts": {},
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "model",
+    "selector",
+    "tui"
+  ],
+  "author": "Ilham Ramadhan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rilham97/pi-model-picker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rilham97/pi-model-picker/issues"
+  },
+  "homepage": "https://github.com/rilham97/pi-model-picker#readme"
+}
