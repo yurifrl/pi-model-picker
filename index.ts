@@ -343,6 +343,7 @@ class ModelPickerComponent {
 			}
 			lines.push(theme.fg("muted", msg));
 		} else {
+			const catKey = this.categories[this.catIndex] ?? "";
 			for (let i = 0; i < visible.length; i++) {
 				const model = visible[i]!;
 				const absIdx = start + i;
@@ -351,7 +352,8 @@ class ModelPickerComponent {
 					this.opts.currentModel?.id === model.id &&
 					this.opts.currentModel?.provider === model.provider;
 				const isFavorite = this.favorites.has(modelKey(model));
-				lines.push(this.renderRow(model, isSelected, isCurrent, isFavorite, width, theme));
+				const showProvider = catKey === FAVORITES_CATEGORY;
+				lines.push(this.renderRow(model, isSelected, isCurrent, isFavorite, showProvider, width, theme));
 			}
 			if (rows.length > MAX_VISIBLE) {
 				const shown = `${start + 1}–${Math.min(start + MAX_VISIBLE, rows.length)} of ${rows.length}`;
@@ -413,6 +415,7 @@ class ModelPickerComponent {
 		isSelected: boolean,
 		isCurrent: boolean,
 		isFavorite: boolean,
+		showProvider: boolean,
 		width: number,
 		theme: any,
 	): string {
@@ -421,7 +424,8 @@ class ModelPickerComponent {
 		const tags: string[] = [];
 		if (model.reasoning) tags.push("thinking");
 		if (model.input.includes("image")) tags.push("vision");
-		const right = `${ctxStr}  ${tags.join(" ")}`;
+		const provider = showProvider ? `${providerLabel(model.provider)}  ` : "";
+		const right = `${provider}${ctxStr}  ${tags.join(" ")}`;
 
 		const favMark = isFavorite ? " ★" : "";
 		const curMark = isCurrent ? " ●" : "";
