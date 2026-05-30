@@ -115,12 +115,8 @@ class ModelPickerComponent {
 		this.byCategory = this.buildCategories();
 		this.categories = Array.from(this.byCategory.keys());
 
-		// Start on the category of the current model
-		const cur = opts.currentModel;
-		const startCat = cur
-			? (this.byCategory.has(cur.provider) ? cur.provider : this.categories[0])
-			: this.categories[0];
-		this.catIndex = Math.max(0, this.categories.indexOf(startCat ?? ""));
+		// Always start on the Favorites category (index 0)
+		this.catIndex = 0;
 
 		// Build the search Input
 		this.searchInput = new Input();
@@ -131,13 +127,14 @@ class ModelPickerComponent {
 			if (selected) opts.onSelect(selected);
 		};
 
-		// Initialise filtered rows and pre-select current model
+		// Initialise filtered rows and pre-select current model if visible in this category
 		this.applyFilter();
+		const cur = this.opts.currentModel;
 		if (cur) {
 			const idx = this.filteredRows.findIndex(
 				(m) => m.id === cur.id && m.provider === cur.provider,
 			);
-			this.rowIndex = Math.max(0, idx);
+			if (idx >= 0) this.rowIndex = idx;
 		}
 	}
 
