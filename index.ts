@@ -28,6 +28,38 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { Container, Input, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { Api, Model } from "@mariozechner/pi-ai";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+
+// ─── favorites persistence ──────────────────────────────────────────────────
+
+const FAVORITES_CATEGORY = "★ Favorites";
+const FAVORITES_FILE = join(homedir(), ".pi", "extensions", "pi-model-picker", "favorites.json");
+
+function modelKey(m: Model<Api>): string {
+	return `${m.provider}:${m.id}`;
+}
+
+function loadFavorites(): Set<string> {
+	try {
+		if (!existsSync(FAVORITES_FILE)) return new Set();
+		const raw = readFileSync(FAVORITES_FILE, "utf8");
+		const arr = JSON.parse(raw);
+		return new Set(Array.isArray(arr) ? arr.filter((x) => typeof x === "string") : []);
+	} catch {
+		return new Set();
+	}
+}
+
+function saveFavorites(favs: Set<string>): void {
+	try {
+		mkdirSync(dirname(FAVORITES_FILE), { recursive: true });
+		writeFileSync(FAVORITES_FILE, JSON.stringify([...favs], null, 2), "utf8");
+	} catch {
+		// best-effort persistence; ignore disk errors
+	}
+}
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -66,6 +98,9 @@ class ModelPickerComponent {
 	// per-category source models (sorted, never mutated)
 	private byCategory: Map<string, Model<Api>[]>;
 
+	// favorite model keys ("provider:id") — persisted to disk
+	private favorites: Set<string>;
+
 	// per-category search terms (reset when category changes, preserved when returning)
 	private searchTerms: Map<string, string> = new Map();
 
@@ -76,6 +111,7 @@ class ModelPickerComponent {
 	private filteredRows: Model<Api>[] = [];
 
 	constructor(private opts: ModelPickerOptions) {
+		this.favorites = loadFavorites();
 		this.byCategory = this.buildCategories();
 		this.categories = Array.from(this.byCategory.keys());
 
@@ -132,15 +168,47 @@ class ModelPickerComponent {
 			});
 		}
 
-		// Sort categories: active provider first, then alphabetical
-		return new Map(
-			[...map.entries()].sort(([aKey], [bKey]) => {
-				const aCur = cur && aKey === cur.provider ? -1 : 0;
-				const bCur = cur && bKey === cur.provider ? -1 : 0;
+		// Sort providers: active provider first, then alphabetical
+		const providerEntries = [...map.entries()].sort(([aKey], [bKey]) => {
+			const aCur = cur && aKey === cur.provider ? -1 : 0;
+			const bCur = cur && bKey === cur.provider ? -1 : 0;
+			if (aCur !== bCur) return aCur - bCur;
+			return aKey.localeCompare(bKey);
+		});
+
+		// Favorites always first — cross-provider list pulled from saved keys
+		return new Map<string, Model<Api>[]>([
+			[FAVORITES_CATEGORY, this.computeFavoriteModels()],
+			...providerEntries,
+		]);
+	}
+
+	private computeFavoriteModels(): Model<Api>[] {
+		const cur = this.opts.currentModel;
+		return this.opts.allModels
+			.filter((m) => this.favorites.has(modelKey(m)))
+			.sort((a, b) => {
+				const aCur = cur && a.id === cur.id && a.provider === cur.provider ? -1 : 0;
+				const bCur = cur && b.id === cur.id && b.provider === cur.provider ? -1 : 0;
 				if (aCur !== bCur) return aCur - bCur;
-				return aKey.localeCompare(bKey);
-			}),
-		);
+				return a.name.localeCompare(b.name);
+			});
+	}
+
+	// ── favorites toggle ────────────────────────────────────────────────
+
+	private toggleFavorite(): void {
+		const selected = this.filteredRows[this.rowIndex];
+		if (!selected) return;
+
+		const key = modelKey(selected);
+		if (this.favorites.has(key)) this.favorites.delete(key);
+		else this.favorites.add(key);
+		saveFavorites(this.favorites);
+
+		// Refresh favorites category contents in place
+		this.byCategory.set(FAVORITES_CATEGORY, this.computeFavoriteModels());
+		this.applyFilter();
 	}
 
 	// ── filtering ────────────────────────────────────────────────────────
@@ -196,6 +264,12 @@ class ModelPickerComponent {
 				this.rowIndex === this.filteredRows.length - 1
 					? 0
 					: this.rowIndex + 1;
+			return;
+		}
+
+		// Ctrl+F — toggle favorite for the selected row
+		if (matchesKey(data, Key.ctrl("f"))) {
+			this.toggleFavorite();
 			return;
 		}
 
@@ -261,9 +335,15 @@ class ModelPickerComponent {
 
 		if (rows.length === 0) {
 			const query = this.searchInput.getValue();
-			const msg = query
-				? `  No models match "${query}"`
-				: "  No models in this category";
+			const catKey = this.categories[this.catIndex] ?? "";
+			let msg: string;
+			if (query) {
+				msg = `  No models match "${query}"`;
+			} else if (catKey === FAVORITES_CATEGORY) {
+				msg = "  No favorites yet — press Ctrl+F on any model to add";
+			} else {
+				msg = "  No models in this category";
+			}
 			lines.push(theme.fg("muted", msg));
 		} else {
 			for (let i = 0; i < visible.length; i++) {
@@ -273,7 +353,8 @@ class ModelPickerComponent {
 				const isCurrent =
 					this.opts.currentModel?.id === model.id &&
 					this.opts.currentModel?.provider === model.provider;
-				lines.push(this.renderRow(model, isSelected, isCurrent, width, theme));
+				const isFavorite = this.favorites.has(modelKey(model));
+				lines.push(this.renderRow(model, isSelected, isCurrent, isFavorite, width, theme));
 			}
 			if (rows.length > MAX_VISIBLE) {
 				const shown = `${start + 1}–${Math.min(start + MAX_VISIBLE, rows.length)} of ${rows.length}`;
@@ -283,7 +364,7 @@ class ModelPickerComponent {
 
 		// ── help bar ─────────────────────────────────────────────────────
 		lines.push(theme.fg("border", "─".repeat(width)));
-		const help = "↑↓ navigate  ·  Tab/← → category  ·  enter select  ·  esc cancel";
+		const help = "↑↓ nav  ·  Tab/← → category  ·  enter select  ·  Ctrl+F favorite  ·  esc";
 		lines.push(theme.fg("dim", truncateToWidth("  " + help, width)));
 
 		return lines;
@@ -334,6 +415,7 @@ class ModelPickerComponent {
 		model: Model<Api>,
 		isSelected: boolean,
 		isCurrent: boolean,
+		isFavorite: boolean,
 		width: number,
 		theme: any,
 	): string {
@@ -344,28 +426,30 @@ class ModelPickerComponent {
 		if (model.input.includes("image")) tags.push("vision");
 		const right = `${ctxStr}  ${tags.join(" ")}`;
 
+		const favMark = isFavorite ? " ★" : "";
 		const curMark = isCurrent ? " ●" : "";
-		const nameAvail = width - visibleWidth(prefix) - visibleWidth(right) - visibleWidth(curMark) - 2;
+		const marks = favMark + curMark;
+		const nameAvail = width - visibleWidth(prefix) - visibleWidth(right) - visibleWidth(marks) - 2;
 		const nameTrunc = truncateToWidth(model.name, Math.max(nameAvail, 10));
 		const gap = " ".repeat(
-			Math.max(0, width - visibleWidth(prefix + nameTrunc + curMark) - visibleWidth(right)),
+			Math.max(0, width - visibleWidth(prefix + nameTrunc + marks) - visibleWidth(right)),
 		);
 
 		if (isSelected) {
 			return (
-				theme.fg("accent", prefix + nameTrunc + curMark) +
+				theme.fg("accent", prefix + nameTrunc + marks) +
 				gap +
 				theme.fg("accent", theme.bold(right))
 			);
 		} else if (isCurrent) {
 			return (
-				theme.fg("success", prefix + nameTrunc + curMark) +
+				theme.fg("success", prefix + nameTrunc + marks) +
 				gap +
 				theme.fg("muted", right)
 			);
 		} else {
 			return (
-				theme.fg("text", prefix + nameTrunc) +
+				theme.fg("text", prefix + nameTrunc + marks) +
 				gap +
 				theme.fg("dim", right)
 			);
