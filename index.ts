@@ -145,7 +145,18 @@ class ModelPickerComponent {
 		// Build the search Input
 		this.searchInput = new Input();
 		this.searchInput.focused = true;
-		this.searchInput.onEscape = () => opts.onCancel();
+		this.searchInput.onEscape = () => {
+			// If there's typed text, clear it instead of exiting
+			if (this.searchInput.getValue().length > 0) {
+				const catKey = this.categories[this.catIndex] ?? "";
+				this.searchInput.setValue("");
+				this.searchTerms.set(catKey, "");
+				this.rowIndex = 0;
+				this.applyFilter();
+			} else {
+				opts.onCancel();
+			}
+		};
 		this.searchInput.onSubmit = () => {
 			const selected = this.filteredRows[this.rowIndex];
 			if (selected) opts.onSelect(selected);
@@ -422,7 +433,7 @@ class ModelPickerComponent {
 					this.opts.currentModel?.provider === model.provider;
 				const isFavorite = this.favorites.has(modelKey(model));
 				const isHidden = this.hidden.has(modelKey(model));
-				const showProvider = catKey === FAVORITES_CATEGORY || catKey === HIDDEN_CATEGORY;
+				const showProvider = catKey === FAVORITES_CATEGORY || catKey === HIDDEN_CATEGORY || catKey === ALL_CATEGORY;
 				lines.push(this.renderRow(model, isSelected, isCurrent, isFavorite, isHidden, showProvider, width, theme));
 			}
 			if (rows.length > MAX_VISIBLE) {
