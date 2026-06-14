@@ -23,6 +23,8 @@ Instead of a flat searchable list, models are grouped by provider in horizontal 
 ```
 
 - **Active model** shown with `●` and highlighted in green
+- **Favorite models** shown with `★`; press `Ctrl+F` to toggle favorites
+- **Hidden models** shown in the `Hidden` tab with `◌`; press `Ctrl+H` to hide/unhide models
 - **Context window** shown as `200k`, `1M`, etc.
 - **Capability tags**: `thinking` (extended reasoning), `vision` (image input)
 - **Search** filters by model name or id within the current category
@@ -79,6 +81,8 @@ Restart pi.
 | `←` / `→` | Switch category (when search field is empty) |
 | `←` / `→` | Move cursor in search field (when field has text) |
 | Type | Filter models in the current category |
+| `Ctrl+F` | Toggle favorite for highlighted model |
+| `Ctrl+H` | Hide/unhide highlighted model |
 | `Enter` | Select highlighted model |
 | `Esc` | Cancel |
 

@@ -32,19 +32,23 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-// ─── favorites persistence ──────────────────────────────────────────────────
+// ─── list persistence ──────────────────────────────────────────────────────
 
 const FAVORITES_CATEGORY = "★ Favorites";
-const FAVORITES_FILE = join(homedir(), ".pi", "extensions", "pi-model-picker", "favorites.json");
+const HIDDEN_CATEGORY = "◌ Hidden";
+const ALL_CATEGORY = "✓ All";
+const STORAGE_DIR = join(homedir(), ".pi", "extensions", "pi-model-picker");
+const FAVORITES_FILE = join(STORAGE_DIR, "favorites.json");
+const HIDDEN_FILE = join(STORAGE_DIR, "hidden.json");
 
 function modelKey(m: Model<Api>): string {
 	return `${m.provider}:${m.id}`;
 }
 
-function loadFavorites(): Set<string> {
+function loadModelKeys(file: string): Set<string> {
 	try {
-		if (!existsSync(FAVORITES_FILE)) return new Set();
-		const raw = readFileSync(FAVORITES_FILE, "utf8");
+		if (!existsSync(file)) return new Set();
+		const raw = readFileSync(file, "utf8");
 		const arr = JSON.parse(raw);
 		return new Set(Array.isArray(arr) ? arr.filter((x) => typeof x === "string") : []);
 	} catch {
@@ -52,13 +56,29 @@ function loadFavorites(): Set<string> {
 	}
 }
 
-function saveFavorites(favs: Set<string>): void {
+function saveModelKeys(file: string, keys: Set<string>): void {
 	try {
-		mkdirSync(dirname(FAVORITES_FILE), { recursive: true });
-		writeFileSync(FAVORITES_FILE, JSON.stringify([...favs], null, 2), "utf8");
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(file, JSON.stringify([...keys], null, 2), "utf8");
 	} catch {
 		// best-effort persistence; ignore disk errors
 	}
+}
+
+function loadFavorites(): Set<string> {
+	return loadModelKeys(FAVORITES_FILE);
+}
+
+function saveFavorites(favs: Set<string>): void {
+	saveModelKeys(FAVORITES_FILE, favs);
+}
+
+function loadHidden(): Set<string> {
+	return loadModelKeys(HIDDEN_FILE);
+}
+
+function saveHidden(hidden: Set<string>): void {
+	saveModelKeys(HIDDEN_FILE, hidden);
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -101,6 +121,9 @@ class ModelPickerComponent {
 	// favorite model keys ("provider:id") — persisted to disk
 	private favorites: Set<string>;
 
+	// hidden model keys ("provider:id") — persisted to disk
+	private hidden: Set<string>;
+
 	// per-category search terms (reset when category changes, preserved when returning)
 	private searchTerms: Map<string, string> = new Map();
 
@@ -112,6 +135,7 @@ class ModelPickerComponent {
 
 	constructor(private opts: ModelPickerOptions) {
 		this.favorites = loadFavorites();
+		this.hidden = loadHidden();
 		this.byCategory = this.buildCategories();
 		this.categories = Array.from(this.byCategory.keys());
 
@@ -149,6 +173,7 @@ class ModelPickerComponent {
 	private buildCategories(): Map<string, Model<Api>[]> {
 		const map = new Map<string, Model<Api>[]>();
 		for (const m of this.opts.allModels) {
+			if (this.hidden.has(modelKey(m))) continue;
 			if (!map.has(m.provider)) map.set(m.provider, []);
 			map.get(m.provider)!.push(m);
 		}
@@ -173,23 +198,39 @@ class ModelPickerComponent {
 			return aKey.localeCompare(bKey);
 		});
 
-		// Favorites always first — cross-provider list pulled from saved keys
+		// Favorites and Hidden are cross-provider lists pulled from saved keys
 		return new Map<string, Model<Api>[]>([
 			[FAVORITES_CATEGORY, this.computeFavoriteModels()],
+			[HIDDEN_CATEGORY, this.computeHiddenModels()],
 			...providerEntries,
+			[ALL_CATEGORY, this.computeAllModels()],
 		]);
 	}
 
 	private computeFavoriteModels(): Model<Api>[] {
+		return this.sortModels(
+			this.opts.allModels.filter(
+				(m) => this.favorites.has(modelKey(m)) && !this.hidden.has(modelKey(m)),
+			),
+		);
+	}
+
+	private computeHiddenModels(): Model<Api>[] {
+		return this.sortModels(this.opts.allModels.filter((m) => this.hidden.has(modelKey(m))));
+	}
+
+	private sortModels(models: Model<Api>[]): Model<Api>[] {
 		const cur = this.opts.currentModel;
-		return this.opts.allModels
-			.filter((m) => this.favorites.has(modelKey(m)))
-			.sort((a, b) => {
-				const aCur = cur && a.id === cur.id && a.provider === cur.provider ? -1 : 0;
-				const bCur = cur && b.id === cur.id && b.provider === cur.provider ? -1 : 0;
-				if (aCur !== bCur) return aCur - bCur;
-				return a.name.localeCompare(b.name);
-			});
+		return [...models].sort((a, b) => {
+			const aCur = cur && a.id === cur.id && a.provider === cur.provider ? -1 : 0;
+			const bCur = cur && b.id === cur.id && b.provider === cur.provider ? -1 : 0;
+			if (aCur !== bCur) return aCur - bCur;
+			return a.name.localeCompare(b.name);
+		});
+	}
+
+	private computeAllModels(): Model<Api>[] {
+		return this.sortModels([...this.opts.allModels]);
 	}
 
 	// ── favorites toggle ────────────────────────────────────────────────
@@ -203,8 +244,28 @@ class ModelPickerComponent {
 		else this.favorites.add(key);
 		saveFavorites(this.favorites);
 
-		// Refresh favorites category contents in place
-		this.byCategory.set(FAVORITES_CATEGORY, this.computeFavoriteModels());
+		this.refreshCategories();
+	}
+
+	// ── hidden toggle ────────────────────────────────────────────────────
+
+	private toggleHidden(): void {
+		const selected = this.filteredRows[this.rowIndex];
+		if (!selected) return;
+
+		const key = modelKey(selected);
+		if (this.hidden.has(key)) this.hidden.delete(key);
+		else this.hidden.add(key);
+		saveHidden(this.hidden);
+
+		this.refreshCategories();
+	}
+
+	private refreshCategories(): void {
+		const currentCategory = this.categories[this.catIndex] ?? FAVORITES_CATEGORY;
+		this.byCategory = this.buildCategories();
+		this.categories = Array.from(this.byCategory.keys());
+		this.catIndex = Math.max(0, this.categories.indexOf(currentCategory));
 		this.applyFilter();
 	}
 
@@ -267,6 +328,12 @@ class ModelPickerComponent {
 		// Ctrl+F — toggle favorite for the selected row
 		if (matchesKey(data, Key.ctrl("f"))) {
 			this.toggleFavorite();
+			return;
+		}
+
+		// Ctrl+H — toggle hidden for the selected row
+		if (matchesKey(data, Key.ctrl("h"))) {
+			this.toggleHidden();
 			return;
 		}
 
@@ -338,6 +405,8 @@ class ModelPickerComponent {
 				msg = `  No models match "${query}"`;
 			} else if (catKey === FAVORITES_CATEGORY) {
 				msg = "  No favorites yet — press Ctrl+F on any model to add";
+			} else if (catKey === HIDDEN_CATEGORY) {
+				msg = "  No hidden models yet — press Ctrl+H on any model to hide";
 			} else {
 				msg = "  No models in this category";
 			}
@@ -352,8 +421,9 @@ class ModelPickerComponent {
 					this.opts.currentModel?.id === model.id &&
 					this.opts.currentModel?.provider === model.provider;
 				const isFavorite = this.favorites.has(modelKey(model));
-				const showProvider = catKey === FAVORITES_CATEGORY;
-				lines.push(this.renderRow(model, isSelected, isCurrent, isFavorite, showProvider, width, theme));
+				const isHidden = this.hidden.has(modelKey(model));
+				const showProvider = catKey === FAVORITES_CATEGORY || catKey === HIDDEN_CATEGORY;
+				lines.push(this.renderRow(model, isSelected, isCurrent, isFavorite, isHidden, showProvider, width, theme));
 			}
 			if (rows.length > MAX_VISIBLE) {
 				const shown = `${start + 1}–${Math.min(start + MAX_VISIBLE, rows.length)} of ${rows.length}`;
@@ -363,7 +433,7 @@ class ModelPickerComponent {
 
 		// ── help bar ─────────────────────────────────────────────────────
 		lines.push(theme.fg("border", "─".repeat(width)));
-		const help = "↑↓ nav  ·  Tab/← → category  ·  enter select  ·  Ctrl+F favorite  ·  esc";
+		const help = "↑↓ nav  ·  Tab/← → category  ·  enter select  ·  Ctrl+F fav  ·  Ctrl+H hide  ·  esc";
 		lines.push(theme.fg("dim", truncateToWidth("  " + help, width)));
 
 		return lines;
@@ -415,6 +485,7 @@ class ModelPickerComponent {
 		isSelected: boolean,
 		isCurrent: boolean,
 		isFavorite: boolean,
+		isHidden: boolean,
 		showProvider: boolean,
 		width: number,
 		theme: any,
@@ -428,8 +499,9 @@ class ModelPickerComponent {
 		const right = `${provider}${ctxStr}  ${tags.join(" ")}`;
 
 		const favMark = isFavorite ? " ★" : "";
+		const hiddenMark = isHidden ? " ◌" : "";
 		const curMark = isCurrent ? " ●" : "";
-		const marks = favMark + curMark;
+		const marks = favMark + hiddenMark + curMark;
 		const nameAvail = width - visibleWidth(prefix) - visibleWidth(right) - visibleWidth(marks) - 2;
 		const nameTrunc = truncateToWidth(model.name, Math.max(nameAvail, 10));
 		const gap = " ".repeat(
