@@ -124,6 +124,15 @@ class ModelPickerComponent {
 	// hidden model keys ("provider:id") — persisted to disk
 	private hidden: Set<string>;
 
+	// whether to show the Hidden category tab
+	private showHiddenTab = false;
+
+	// filters
+	private filterThinking: boolean | null = null;
+	private filterVision: boolean | null = null;
+	private filterMinTokens: number | null = null;
+	private filterMaxTokens: number | null = null;
+
 	// per-category search terms (reset when category changes, preserved when returning)
 	private searchTerms: Map<string, string> = new Map();
 
@@ -210,12 +219,15 @@ class ModelPickerComponent {
 		});
 
 		// Favorites and Hidden are cross-provider lists pulled from saved keys
-		return new Map<string, Model<Api>[]>([
+		const entries: [string, Model<Api>[]][] = [
 			[FAVORITES_CATEGORY, this.computeFavoriteModels()],
-			[HIDDEN_CATEGORY, this.computeHiddenModels()],
-			...providerEntries,
-			[ALL_CATEGORY, this.computeAllModels()],
-		]);
+		];
+		if (this.showHiddenTab) {
+			entries.push([HIDDEN_CATEGORY, this.computeHiddenModels()]);
+		}
+		entries.push(...providerEntries);
+		entries.push([ALL_CATEGORY, this.computeAllModels()]);
+		return new Map<string, Model<Api>[]>(entries);
 	}
 
 	private computeFavoriteModels(): Model<Api>[] {
@@ -280,22 +292,105 @@ class ModelPickerComponent {
 		this.applyFilter();
 	}
 
+	private toggleHiddenTab(): void {
+		this.showHiddenTab = !this.showHiddenTab;
+		const currentCategory = this.categories[this.catIndex] ?? FAVORITES_CATEGORY;
+		this.byCategory = this.buildCategories();
+		this.categories = Array.from(this.byCategory.keys());
+
+		// If we just hid the tab and we were on it, switch to Favorites
+		if (!this.showHiddenTab && currentCategory === HIDDEN_CATEGORY) {
+			this.catIndex = this.categories.indexOf(FAVORITES_CATEGORY);
+		} else {
+			this.catIndex = Math.max(0, this.categories.indexOf(currentCategory));
+		}
+		this.applyFilter();
+	}
+
 	// ── filtering ────────────────────────────────────────────────────────
+
+	private cycleThinkingFilter(): void {
+		if (this.filterThinking === null) this.filterThinking = true;
+		else if (this.filterThinking === true) this.filterThinking = false;
+		else this.filterThinking = null;
+		this.rowIndex = 0;
+		this.applyFilter();
+	}
+
+	private cycleVisionFilter(): void {
+		if (this.filterVision === null) this.filterVision = true;
+		else if (this.filterVision === true) this.filterVision = false;
+		else this.filterVision = null;
+		this.rowIndex = 0;
+		this.applyFilter();
+	}
+
+	private TOKEN_STEPS = [null, 4_000, 8_000, 32_000, 128_000, 1_000_000, 2_000_000];
+
+	private decreaseTokenFilter(): void {
+		const currentIdx = this.TOKEN_STEPS.indexOf(this.filterMaxTokens);
+		if (currentIdx > 0) {
+			this.filterMaxTokens = this.TOKEN_STEPS[currentIdx - 1];
+		} else {
+			this.filterMaxTokens = null;
+		}
+		this.rowIndex = 0;
+		this.applyFilter();
+	}
+
+	private increaseTokenFilter(): void {
+		const currentIdx = this.TOKEN_STEPS.indexOf(this.filterMaxTokens);
+		if (currentIdx < this.TOKEN_STEPS.length - 1) {
+			this.filterMaxTokens = this.TOKEN_STEPS[currentIdx + 1] ?? null;
+		}
+		this.rowIndex = 0;
+		this.applyFilter();
+	}
+
+	private clearFilters(): void {
+		this.filterThinking = null;
+		this.filterVision = null;
+		this.filterMaxTokens = null;
+		this.rowIndex = 0;
+		this.applyFilter();
+	}
 
 	private applyFilter(): void {
 		const catKey = this.categories[this.catIndex] ?? "";
 		const source = this.byCategory.get(catKey) ?? [];
 		const query = (this.searchTerms.get(catKey) ?? "").toLowerCase().trim();
 
-		if (!query) {
-			this.filteredRows = source;
-		} else {
-			this.filteredRows = source.filter(
+		let result = source;
+
+		// Apply text query filter
+		if (query) {
+			result = result.filter(
 				(m) =>
 					m.name.toLowerCase().includes(query) ||
 					m.id.toLowerCase().includes(query),
 			);
 		}
+
+		// Apply thinking filter
+		if (this.filterThinking === true) {
+			result = result.filter((m) => m.reasoning);
+		} else if (this.filterThinking === false) {
+			result = result.filter((m) => !m.reasoning);
+		}
+
+		// Apply vision filter
+		if (this.filterVision === true) {
+			result = result.filter((m) => m.input.includes("image"));
+		} else if (this.filterVision === false) {
+			result = result.filter((m) => !m.input.includes("image"));
+		}
+
+		// Apply max token filter
+		if (this.filterMaxTokens !== null) {
+			result = result.filter((m) => m.contextWindow <= this.filterMaxTokens);
+		}
+
+		this.filteredRows = result;
 		// Clamp row selection
 		this.rowIndex = Math.min(this.rowIndex, Math.max(0, this.filteredRows.length - 1));
 	}
@@ -348,6 +443,42 @@ class ModelPickerComponent {
 			return;
 		}
 
+		// Ctrl+Shift+H — toggle visibility of the Hidden tab
+		if (matchesKey(data, Key.ctrlShift("h"))) {
+			this.toggleHiddenTab();
+			return;
+		}
+
+		// Ctrl+T — toggle thinking filter (null → true → false → null)
+		if (matchesKey(data, Key.ctrl("t"))) {
+			this.cycleThinkingFilter();
+			return;
+		}
+
+		// Ctrl+V — toggle vision filter (null → true → false → null)
+		if (matchesKey(data, Key.ctrl("v"))) {
+			this.cycleVisionFilter();
+			return;
+		}
+
+		// Ctrl+[ — decrease max token filter (step down through common values)
+		if (matchesKey(data, Key.ctrl("["))) {
+			this.decreaseTokenFilter();
+			return;
+		}
+
+		// Ctrl+] — increase max token filter (step up through common values)
+		if (matchesKey(data, Key.ctrl("]"))) {
+			this.increaseTokenFilter();
+			return;
+		}
+
+		// Ctrl+Backspace — clear all filters
+		if (matchesKey(data, Key.ctrl("backspace"))) {
+			this.clearFilters();
+			return;
+		}
+
 		// Tab / Shift+Tab — switch category
 		if (matchesKey(data, Key.tab)) {
 			this.switchCategory(1);
@@ -390,6 +521,13 @@ class ModelPickerComponent {
 
 		// ── tab bar ──────────────────────────────────────────────────────
 		lines.push(this.renderTabs(width, theme));
+
+		// ── filter bar ──────────────────────────────────────────────────
+		const activeFilters = this.renderFilterStatus(theme);
+		if (activeFilters) {
+			lines.push(theme.fg("border", "─".repeat(width)));
+			lines.push(truncateToWidth("  " + activeFilters, width));
+		}
 
 		// ── search field ─────────────────────────────────────────────────
 		lines.push(theme.fg("border", "─".repeat(width)));
@@ -444,7 +582,17 @@ class ModelPickerComponent {
 
 		// ── help bar ─────────────────────────────────────────────────────
 		lines.push(theme.fg("border", "─".repeat(width)));
-		const help = "↑↓ nav  ·  Tab/← → category  ·  enter select  ·  Ctrl+F fav  ·  Ctrl+H hide  ·  esc";
+		const filtersActive = this.filterThinking !== null || this.filterVision !== null || this.filterMaxTokens !== null;
+		let help = "↑↓ nav · Tab/←→ cat · enter select · Ctrl+F fav · Ctrl+H hide · Ctrl+T think · Ctrl+V vision · Ctrl+[/] tokens";
+		if (this.showHiddenTab) {
+			help += " · Ctrl+Shift+H unhide-tab";
+		} else {
+			help += " · Ctrl+Shift+H show-tab";
+		}
+		if (filtersActive) {
+			help += " · Ctrl+BS clear";
+		}
+		help += " · esc";
 		lines.push(theme.fg("dim", truncateToWidth("  " + help, width)));
 
 		return lines;
@@ -538,6 +686,31 @@ class ModelPickerComponent {
 				theme.fg("dim", right)
 			);
 		}
+	}
+
+	private renderFilterStatus(theme: any): string {
+		const parts: string[] = [];
+
+		if (this.filterThinking !== null) {
+			parts.push(theme.fg(this.filterThinking ? "success" : "warning", `thinking:${this.filterThinking}" : "no"}`));
+		}
+
+		if (this.filterVision !== null) {
+			parts.push(theme.fg(this.filterVision ? "success" : "warning", `vision:${this.filterVision ? "yes" : "no"}`));
+		}
+
+		if (this.filterMaxTokens !== null) {
+			const tokenStr = this.filterMaxTokens >= 1_000_000
+				? `${(this.filterMaxTokens / 1_000_000).toFixed(0)}M`
+				: this.filterMaxTokens >= 1_000
+					? `${(this.filterMaxTokens / 1_000).toFixed(0)}k`
+					: String(this.filterMaxTokens);
+			parts.push(theme.fg("accent", `≤${tokenStr}`));
+		}
+
+		if (parts.length === 0) return "";
+
+		return theme.fg("muted", "Filters: ") + theme.fg("text", parts.join(" "));
 	}
 
 	invalidate(): void {
