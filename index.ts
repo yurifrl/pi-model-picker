@@ -37,7 +37,7 @@ import { dirname, join } from "node:path";
 const FAVORITES_CATEGORY = "★ Favorites";
 const HIDDEN_CATEGORY = "◌ Hidden";
 const ALL_CATEGORY = "✓ All";
-const STORAGE_DIR = join(homedir(), ".pi", "extensions", "pi-model-picker");
+const STORAGE_DIR = join(homedir(), ".pi", "agent", "extensions", "pi-model-picker");
 const FAVORITES_FILE = join(STORAGE_DIR, "favorites.json");
 const HIDDEN_FILE = join(STORAGE_DIR, "hidden.json");
 
